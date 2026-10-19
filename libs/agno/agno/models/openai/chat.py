@@ -758,8 +758,27 @@ class OpenAIChat(Model):
             List[Dict[str, Any]]: The built tool calls.
         """
         tool_calls: List[Dict[str, Any]] = []
+        # Slot used by the most recent chunk. Some OpenAI-compatible providers
+        # (e.g. Gemini's OpenAI-compatible endpoint) stream tool calls without
+        # an `index`; for those, a chunk carrying a different id starts a new
+        # tool call, while a chunk with the same or no id continues the
+        # current one.
+        last_index: Optional[int] = None
         for _tool_call in tool_calls_data:
-            _index = _tool_call.index or 0
+            if _tool_call.index is not None:
+                _index = _tool_call.index
+            elif (
+                last_index is not None
+                and _tool_call.id
+                and tool_calls[last_index].get("id")
+                and _tool_call.id != tool_calls[last_index]["id"]
+            ):
+                _index = last_index + 1
+            elif last_index is not None:
+                _index = last_index
+            else:
+                _index = 0
+            last_index = _index
             _tool_call_id = _tool_call.id
             _tool_call_type = _tool_call.type
             _function_name = _tool_call.function.name if _tool_call.function else None

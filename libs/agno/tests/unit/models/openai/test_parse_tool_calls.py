@@ -196,3 +196,87 @@ def test_parse_response_delta_without_annotations_has_no_citations():
 
     assert model_response.citations is None
     assert model_response.content == "hi"
+
+
+# ---------------------------------------------------------------------------
+# Index-less streaming (OpenAI-compatible providers such as Gemini)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_tool_calls_missing_index_parallel_calls_split():
+    """Index-less chunks with different ids must produce separate tool calls.
+
+    Gemini's OpenAI-compatible endpoint streams each parallel tool call whole
+    in its own chunk without `tool_calls[].index`. With `index or 0` every
+    call lands in slot 0: arguments are concatenated and the id is
+    overwritten, so no tool runs.
+    """
+    deltas = [
+        _FakeChoiceDeltaToolCall(
+            index=None,
+            tool_id="call_4234484",
+            tool_type="function",
+            func_name="get_weather",
+            func_args='{"city":"Paris"}',
+        ),
+        _FakeChoiceDeltaToolCall(
+            index=None,
+            tool_id="call_4234487",
+            tool_type="function",
+            func_name="get_weather",
+            func_args='{"city":"Tokyo"}',
+        ),
+    ]
+    result = OpenAIChat.parse_tool_calls(deltas)
+
+    assert len(result) == 2
+    assert result[0]["id"] == "call_4234484"
+    assert result[0]["function"]["arguments"] == '{"city":"Paris"}'
+    assert result[1]["id"] == "call_4234487"
+    assert result[1]["function"]["arguments"] == '{"city":"Tokyo"}'
+
+
+def test_parse_tool_calls_missing_index_same_id_continues():
+    """Index-less chunks repeating the same id accumulate into one tool call."""
+    deltas = [
+        _FakeChoiceDeltaToolCall(
+            index=None, tool_id="call_1", tool_type="function", func_name="search", func_args='{"q":"wea'
+        ),
+        _FakeChoiceDeltaToolCall(index=None, tool_id="call_1", func_args='ther"}'),
+    ]
+    result = OpenAIChat.parse_tool_calls(deltas)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "call_1"
+    assert result[0]["function"]["name"] == "search"
+    assert result[0]["function"]["arguments"] == '{"q":"weather"}'
+
+
+def test_parse_tool_calls_missing_index_no_id_continues():
+    """Index-less chunks without any id continue the current tool call."""
+    deltas = [
+        _FakeChoiceDeltaToolCall(
+            index=None, tool_id="call_1", tool_type="function", func_name="search", func_args='{"q":"wea'
+        ),
+        _FakeChoiceDeltaToolCall(index=None, func_args='ther"}'),
+    ]
+    result = OpenAIChat.parse_tool_calls(deltas)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "call_1"
+    assert result[0]["function"]["arguments"] == '{"q":"weather"}'
+
+
+def test_parse_tool_calls_missing_index_after_indexed_chunk():
+    """An index-less chunk with a new id after an indexed chunk starts a new slot."""
+    deltas = [
+        _FakeChoiceDeltaToolCall(index=0, tool_id="call_1", tool_type="function", func_name="tool_a", func_args="{}"),
+        _FakeChoiceDeltaToolCall(
+            index=None, tool_id="call_2", tool_type="function", func_name="tool_b", func_args="{}"
+        ),
+    ]
+    result = OpenAIChat.parse_tool_calls(deltas)
+
+    assert len(result) == 2
+    assert result[0]["id"] == "call_1"
+    assert result[1]["id"] == "call_2"
